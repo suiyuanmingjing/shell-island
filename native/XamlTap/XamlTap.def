@@ -1,0 +1,4 @@
+﻿LIBRARY XamlTap
+EXPORTS
+    DllGetClassObject
+    DllCanUnloadNow
