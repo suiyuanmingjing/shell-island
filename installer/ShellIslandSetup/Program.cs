@@ -199,6 +199,8 @@ internal sealed class SetupForm : Form
             CreateShortcut(creator, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "ShellIsland.lnk"), exe, target);
         }
 
+        CreateTapTask(target);
+
         // 不能从管理员安装进程直接启动，否则应用和注入器都是高完整性，无法注入普通权限的 Explorer。
         Process.Start(new ProcessStartInfo
         {
@@ -206,6 +208,69 @@ internal sealed class SetupForm : Form
             Arguments = $"\"{exe}\"",
             UseShellExecute = true,
         });
+    }
+
+    private static void CreateTapTask(string target)
+    {
+        try
+        {
+            var app = Path.Combine(target, "app");
+            var cmd = Path.Combine(app, "inject-tap.cmd");
+            File.WriteAllText(cmd,
+                "@echo off\r\n" +
+                "\"%~dp0Injector.exe\" \"%~dp0XamlTap.dll\"\r\n",
+                Encoding.Default);
+
+            var user = System.Security.Principal.WindowsIdentity.GetCurrent().Name;
+            var escapedUser = System.Security.SecurityElement.Escape(user);
+            var escapedCmd = System.Security.SecurityElement.Escape(cmd);
+            var xml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<Task version=""1.4"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
+  <RegistrationInfo><Description>ShellIsland TAP injector</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
+  <Principals>
+    <Principal id=""Author"">
+      <UserId>{escapedUser}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <Hidden>true</Hidden>
+  </Settings>
+  <Actions Context=""Author"">
+    <Exec>
+      <Command>cmd.exe</Command>
+      <Arguments>/c ""{escapedCmd}""</Arguments>
+    </Exec>
+  </Actions>
+</Task>";
+            var xmlPath = Path.Combine(app, "ShellIslandTap.xml");
+            File.WriteAllText(xmlPath, xml, new UTF8Encoding(false));
+
+            Run("schtasks.exe", $"/Create /TN \"ShellIslandTap\" /XML \"{xmlPath}\" /F");
+            Run("schtasks.exe", "/Run /TN \"ShellIslandTap\"");
+        }
+        catch
+        {
+            // 注入任务失败时保留应用，启动后仍会尝试一次普通注入
+        }
+    }
+
+    private static void Run(string file, string arguments)
+    {
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = file,
+            Arguments = arguments,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        });
+        process?.WaitForExit(15000);
     }
 
     private static void CreateShortcut(dynamic shell, string shortcutPath, string exe, string workingDirectory)
