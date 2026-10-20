@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Reflection;
 using System.Text;
@@ -21,12 +21,13 @@ internal sealed class SetupForm : Form
     private readonly Button _browse;
     private readonly Button _install;
     private readonly Label _status;
+    private readonly CheckBox _startup;
 
     public SetupForm()
     {
         Text = "ShellIsland 安装程序";
         Width = 560;
-        Height = 210;
+        Height = 250;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -67,12 +68,22 @@ internal sealed class SetupForm : Form
             }
         };
 
+        _startup = new CheckBox
+        {
+            Text = "开机时自动启动 ShellIsland",
+            Left = 20,
+            Top = 90,
+            Width = 320,
+            Height = 24,
+            Checked = true,
+        };
+
         _status = new Label
         {
             Text = "安装到该目录，并创建快捷方式。",
             AutoSize = false,
             Left = 20,
-            Top = 92,
+            Top = 120,
             Width = 510,
             Height = 22,
             ForeColor = Color.DimGray,
@@ -82,7 +93,7 @@ internal sealed class SetupForm : Form
         {
             Text = "安装",
             Left = 420,
-            Top = 128,
+            Top = 165,
             Width = 110,
             Height = 32,
         };
@@ -92,13 +103,13 @@ internal sealed class SetupForm : Form
         {
             Text = "取消",
             Left = 320,
-            Top = 128,
+            Top = 165,
             Width = 90,
             Height = 32,
             DialogResult = DialogResult.Cancel,
         };
 
-        Controls.AddRange(new Control[] { title, _path, _browse, _status, _install, cancel });
+        Controls.AddRange(new Control[] { title, _path, _browse, _startup, _status, _install, cancel });
         AcceptButton = _install;
         CancelButton = cancel;
     }
@@ -118,7 +129,7 @@ internal sealed class SetupForm : Form
 
         try
         {
-            await Task.Run(() => Install(target));
+            await Task.Run(() => Install(target, _startup.Checked));
             _status.Text = "安装完成。";
             MessageBox.Show(this, "ShellIsland 已安装。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
             Close();
@@ -132,7 +143,7 @@ internal sealed class SetupForm : Form
         }
     }
 
-    private static void Install(string target)
+    private static void Install(string target, bool startup)
     {
         foreach (var process in Process.GetProcessesByName("ShellIsland"))
         {
@@ -175,12 +186,26 @@ internal sealed class SetupForm : Form
         if (shell is not null)
         {
             dynamic creator = Activator.CreateInstance(shell)!;
-            CreateShortcut(creator, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "ShellIsland.lnk"), exe, target);
+            var startupShortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "ShellIsland.lnk");
+            if (startup)
+            {
+                CreateShortcut(creator, startupShortcut, exe, target);
+            }
+            else
+            {
+                try { File.Delete(startupShortcut); } catch { }
+            }
             CreateShortcut(creator, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "ShellIsland.lnk"), exe, target);
             CreateShortcut(creator, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "ShellIsland.lnk"), exe, target);
         }
 
-        Process.Start(new ProcessStartInfo { FileName = exe, UseShellExecute = true });
+        // 不能从管理员安装进程直接启动，否则应用和注入器都是高完整性，无法注入普通权限的 Explorer。
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = $"\"{exe}\"",
+            UseShellExecute = true,
+        });
     }
 
     private static void CreateShortcut(dynamic shell, string shortcutPath, string exe, string workingDirectory)

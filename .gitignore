@@ -1,4 +1,4 @@
-﻿bin/
+bin/
 obj/
 dist/
 vendor/
@@ -20,3 +20,4 @@ installer/ShellIslandSetup/payload.zip
 installer/ShellIslandSetup/bin/
 installer/ShellIslandSetup/obj/
 artifacts/
+installer/_payload/
