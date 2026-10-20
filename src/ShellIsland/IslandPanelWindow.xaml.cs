@@ -18,6 +18,7 @@ public partial class IslandPanelWindow : Window
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(350) };
     private string _lyricKey = string.Empty;
     private bool _translationEnabled = true;
+    private bool _leftPanel;
     private LyricLine? _currentLine;
     private string _sourceKey = string.Empty;
     private string _sourceName = string.Empty;
@@ -33,7 +34,11 @@ public partial class IslandPanelWindow : Window
         _timer.Start();
         _autoHide.Tick += (_, _) => Close();
         PreviewMouseMove += (_, _) => ResetAutoHide();
-        PreviewMouseDown += (_, _) => ResetAutoHide();
+        PreviewMouseDown += (_, _) => { _leftPanel = false; ResetAutoHide(); };
+        MouseEnter += (_, _) => { _leftPanel = false; ResetAutoHide(); };
+        MouseLeave += (_, _) => { _leftPanel = true; };
+        PreviewKeyDown += (_, _) => { if (_leftPanel) Close(); };
+        Deactivated += (_, _) => { if (_leftPanel) Close(); };
         Closed += (_, _) => { _timer.Stop(); _autoHide.Stop(); };
         ResetAutoHide();
     }

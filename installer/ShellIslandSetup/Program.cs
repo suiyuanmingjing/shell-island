@@ -199,7 +199,7 @@ internal sealed class SetupForm : Form
             CreateShortcut(creator, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "ShellIsland.lnk"), exe, target);
         }
 
-        CreateTapTask(target);
+        CreateInjectorService(target);
 
         // 不能从管理员安装进程直接启动，否则应用和注入器都是高完整性，无法注入普通权限的 Explorer。
         Process.Start(new ProcessStartInfo
@@ -212,65 +212,97 @@ internal sealed class SetupForm : Form
 
     private static void CreateTapTask(string target)
     {
+        var app = Path.Combine(target, "app");
+        var cmd = Path.Combine(app, "inject-tap.cmd");
+        File.WriteAllText(cmd,
+            "@echo off\r\n" +
+            "\"%~dp0Injector.exe\" \"%~dp0XamlTap.dll\"\r\n",
+            Encoding.Default);
+
+        var scriptPath = Path.Combine(app, "register-task.ps1");
+        File.WriteAllText(scriptPath, """
+$ErrorActionPreference = 'Stop'
+$cmd = Join-Path $PSScriptRoot 'inject-tap.cmd'
+$action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c "' + $cmd + '"')
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+Register-ScheduledTask -TaskName 'ShellIslandTap' -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+Start-ScheduledTask -TaskName 'ShellIslandTap'
+""", new UTF8Encoding(false));
+
+        var logPath = Path.Combine(app, "task-install.log");
         try
         {
-            var app = Path.Combine(target, "app");
-            var cmd = Path.Combine(app, "inject-tap.cmd");
-            File.WriteAllText(cmd,
-                "@echo off\r\n" +
-                "\"%~dp0Injector.exe\" \"%~dp0XamlTap.dll\"\r\n",
-                Encoding.Default);
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            if (process is null)
+            {
+                File.WriteAllText(logPath, "无法启动 PowerShell");
+                return;
+            }
 
-            var user = System.Security.Principal.WindowsIdentity.GetCurrent().Name;
-            var escapedUser = System.Security.SecurityElement.Escape(user);
-            var escapedCmd = System.Security.SecurityElement.Escape(cmd);
-            var xml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
-<Task version=""1.4"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
-  <RegistrationInfo><Description>ShellIsland TAP injector</Description></RegistrationInfo>
-  <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
-  <Principals>
-    <Principal id=""Author"">
-      <UserId>{escapedUser}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>HighestAvailable</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
-    <Hidden>true</Hidden>
-  </Settings>
-  <Actions Context=""Author"">
-    <Exec>
-      <Command>cmd.exe</Command>
-      <Arguments>/c ""{escapedCmd}""</Arguments>
-    </Exec>
-  </Actions>
-</Task>";
-            var xmlPath = Path.Combine(app, "ShellIslandTap.xml");
-            File.WriteAllText(xmlPath, xml, new UTF8Encoding(false));
-
-            Run("schtasks.exe", $"/Create /TN \"ShellIslandTap\" /XML \"{xmlPath}\" /F");
-            Run("schtasks.exe", "/Run /TN \"ShellIslandTap\"");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit(30000);
+            File.WriteAllText(logPath, $"exit={process.ExitCode}\r\n{stdout}\r\n{stderr}");
         }
-        catch
+        catch (Exception ex)
         {
-            // 注入任务失败时保留应用，启动后仍会尝试一次普通注入
+            File.WriteAllText(logPath, ex.ToString());
         }
     }
 
-    private static void Run(string file, string arguments)
+    private static void CreateInjectorService(string target)
     {
-        using var process = Process.Start(new ProcessStartInfo
+        var app = Path.Combine(target, "app");
+        var service = Path.Combine(app, "ShellIslandService.exe");
+        var log = Path.Combine(app, "service-install.log");
+        if (!File.Exists(service))
         {
-            FileName = file,
-            Arguments = arguments,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        });
-        process?.WaitForExit(15000);
+            File.WriteAllText(log, "缺少 ShellIslandService.exe");
+            return;
+        }
+
+        RunCommand("schtasks.exe", "/Delete /TN \"ShellIslandTap\" /F", log);
+        RunCommand("sc.exe", "stop ShellIslandInjector", log);
+        RunCommand("sc.exe", "delete ShellIslandInjector", log);
+
+        var createArgs = $"create ShellIslandInjector binPath= \"\\\"{service}\\\"\" start= auto obj= LocalSystem DisplayName= \"ShellIsland Injector\"";
+        RunCommand("sc.exe", createArgs, log);
+        RunCommand("sc.exe", "start ShellIslandInjector", log);
+    }
+
+    private static void RunCommand(string file, string arguments, string logPath)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = file,
+                Arguments = arguments,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            if (process is null) return;
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit(15000);
+            File.AppendAllText(logPath,
+                $"{file} {arguments}\r\nexit={process.ExitCode}\r\n{output}\r\n{error}\r\n");
+        }
+        catch (Exception ex)
+        {
+            File.AppendAllText(logPath, $"{file} {arguments}\r\n{ex}\r\n");
+        }
     }
 
     private static void CreateShortcut(dynamic shell, string shortcutPath, string exe, string workingDirectory)

@@ -154,6 +154,18 @@ static void MediaThread()
         Sleep(1000);
     }
 }
+static DWORD SearchboxMode()
+{
+    DWORD mode = 1;
+    DWORD size = sizeof(mode);
+    if (RegGetValueW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+        L"SearchboxTaskbarMode", RRF_RT_REG_DWORD, nullptr, &mode, &size) != ERROR_SUCCESS)
+    {
+        mode = 1;
+    }
+    return mode;
+}
 static double SearchModeWidth()
 {
     DWORD mode = 1;
@@ -646,8 +658,9 @@ public:
                     if (actual > 20) width = actual;
                 }
 
-                const bool showText = width >= 90;
-                const bool showArtist = width >= 170 && !artist.empty();
+                const DWORD searchMode = SearchboxMode();
+                const bool showText = searchMode != 1;
+                const bool showTitle = searchMode == 3 && !artist.empty();
                 const double viewport = (std::max)(20.0, width - 44.0);
                 AnimateWidth((std::max)(32.0, width - 4.0));
                 m_textPanel.Width(viewport);
@@ -676,8 +689,8 @@ public:
                 }
                 m_title.Text(title);
                 m_artist.Text(artist);
-                m_title.FontSize(showArtist ? 13.0 : 11.5);
-                m_artist.Visibility(showArtist ? winrt::Windows::UI::Xaml::Visibility::Visible
+                m_title.FontSize(showTitle ? 13.0 : 11.5);
+                m_artist.Visibility(showTitle ? winrt::Windows::UI::Xaml::Visibility::Visible
                                                : winrt::Windows::UI::Xaml::Visibility::Collapsed);
             }
             else
