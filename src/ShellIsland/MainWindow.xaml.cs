@@ -168,15 +168,6 @@ public partial class MainWindow : Window
             IslandGlyph.Visibility = Visibility.Visible;
         }
 
-        if (!_lastMedia.HasMedia && next.HasMedia && next.IsPlaying && !_shownCapsule)
-        {
-            _shownCapsule = true;
-            ShowIsland(autoCollapse: !_keepCapsule);
-        }
-        else if (!next.HasMedia)
-        {
-            _shownCapsule = false;
-        }
 
         _lastMedia = next;
         var lyricLine = await _lyrics.GetCurrentLineAsync(next.Title, next.Artist, next.Position);
