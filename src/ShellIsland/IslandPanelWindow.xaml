@@ -1,0 +1,94 @@
+<Window x:Class="ShellIsland.IslandPanelWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="420" Height="230"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        Topmost="True" ShowInTaskbar="False" ResizeMode="NoResize"
+        WindowStartupLocation="Manual">
+    <Border x:Name="Root" CornerRadius="16" BorderThickness="1" Padding="16">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="42"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="60"/>
+                </Grid.ColumnDefinitions>
+                <Border x:Name="SearchButton" Width="34" Height="34" CornerRadius="17" BorderThickness="1"
+                        HorizontalAlignment="Left" VerticalAlignment="Center"
+                        MouseLeftButtonUp="OnSearchClick" Cursor="Hand">
+                    <TextBlock x:Name="SearchGlyph" Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,10,0">
+                    <TextBlock x:Name="TitleText" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock x:Name="ArtistText" FontSize="10.5" Opacity="0.6" Margin="0,1,0,0" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+                <Grid Grid.Column="2" Width="52" Height="52" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Ellipse Fill="#18FFFFFF"/>
+                    <Ellipse x:Name="ArtworkEllipse">
+                        <Ellipse.Fill>
+                            <ImageBrush x:Name="ArtworkBrush" Stretch="UniformToFill"/>
+                        </Ellipse.Fill>
+                    </Ellipse>
+                    <TextBlock x:Name="ArtworkFallback" Text="&#xE8D6;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+            </Grid>
+
+            <StackPanel Grid.Row="1" VerticalAlignment="Center" Margin="0,6,0,4">
+                <TextBlock x:Name="LyricText" FontSize="21" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                <TextBlock x:Name="LyricTranslation" FontSize="13" Opacity="0.65" TextWrapping="Wrap" Margin="0,3,0,0"/>
+            </StackPanel>
+
+            <StackPanel Grid.Row="2">
+                <ProgressBar x:Name="Progress" Height="3" BorderThickness="0"/>
+                <Grid Margin="0,5,0,0">
+                    <TextBlock x:Name="PositionText" FontSize="10" Opacity="0.55" HorizontalAlignment="Left"/>
+                    <TextBlock x:Name="DurationText" FontSize="10" Opacity="0.55" HorizontalAlignment="Right"/>
+                </Grid>
+            </StackPanel>
+
+            <Grid Grid.Row="3" Margin="0,2,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <Image x:Name="SourceIcon" Width="16" Height="16" Margin="0,0,5,0"/>
+                    <TextBlock x:Name="SourceFallback" Text="&#xE8D6;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="0,0,5,0"/>
+                    <TextBlock x:Name="SourceName" FontSize="10" Opacity="0.6" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
+                    <Button x:Name="PrevButton" Click="OnPreviousClick" Width="38" Height="32" Background="Transparent" BorderThickness="0">
+                        <TextBlock x:Name="PrevGlyph" Text="&#xE892;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"/>
+                    </Button>
+                    <Button x:Name="PlayButton" Click="OnPlayClick" Width="44" Height="32" Background="Transparent" BorderThickness="0" Margin="6,0">
+                        <TextBlock x:Name="PlayGlyph" Text="&#xE768;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="NextButton" Click="OnNextClick" Width="38" Height="32" Background="Transparent" BorderThickness="0">
+                        <TextBlock x:Name="NextGlyph" Text="&#xE893;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"/>
+                    </Button>
+                </StackPanel>
+                <Button x:Name="TranslateButton" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center"
+                        Width="32" Height="28" Click="OnTranslateClick" Content="译" FontSize="11"
+                        Background="Transparent" BorderThickness="0" Padding="0">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="Transparent">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
