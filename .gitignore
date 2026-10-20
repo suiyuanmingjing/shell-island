@@ -19,3 +19,4 @@ installer/output/
 installer/ShellIslandSetup/payload.zip
 installer/ShellIslandSetup/bin/
 installer/ShellIslandSetup/obj/
+artifacts/

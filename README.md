@@ -1,4 +1,4 @@
-﻿# ShellIsland
+# ShellIsland
 
 Windows 11 任务栏音乐岛，使用 Explorer XAML 注入实现。
 
@@ -14,7 +14,7 @@ TAP DLL 和 Injector 在 `native/XamlTap`、`native/ShellHook` 中构建，发�
 
 ## 安装
 
-使用 Release 中的 `ShellIsland-1.0.0-win-x64.zip`，解压后以管理员身份运行 `Install.cmd`。
+使用 Release 中的 `ShellIslandSetup.exe`，运行后选择安装目录。
 
 注入器和 TAP 会被杀软误判，安装脚本会添加 Defender 排除。
 
