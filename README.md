@@ -28,3 +28,9 @@ TAP DLL 和 Injector 在 `native/XamlTap`、`native/ShellHook` 中构建，发�
 使用 Release 中的 `ShellIsland-1.0.0-win-x64.zip`，解压后以管理员身份运行 `Install.cmd`。
 
 注入器和 TAP 会被杀软误判，安装脚本会添加 Defender 排除。
+
+## 赞助
+
+如果 ShellIsland 对你有帮助，欢迎支持一下：
+
+<img src="docs/afdian.jpg" alt="爱发电赞助码" width="320" />
