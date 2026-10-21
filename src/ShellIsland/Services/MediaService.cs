@@ -1,4 +1,7 @@
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Text.Json;
 using System.Windows.Media.Imaging;
 using Windows.Media.Control;
 
@@ -22,6 +25,11 @@ public sealed record MediaSnapshot(
 
 public sealed class MediaService
 {
+    private static readonly HttpClient CoverHttp = new(new HttpClientHandler { UseProxy = false })
+    {
+        Timeout = TimeSpan.FromSeconds(8),
+    };
+    private static readonly Dictionary<string, BitmapSource?> CoverCache = new();
     private GlobalSystemMediaTransportControlsSessionManager? _manager;
     private DateTime _lastInitAttempt = DateTime.MinValue;
 
@@ -65,9 +73,10 @@ public sealed class MediaService
             var props = await session.TryGetMediaPropertiesAsync();
             var playback = session.GetPlaybackInfo();
             var timeline = session.GetTimelineProperties();
-            var artwork = await ReadArtworkAsync(props.Thumbnail);
             var title = props.Title ?? string.Empty;
             var artist = props.Artist ?? string.Empty;
+            var artwork = await ReadArtworkAsync(props.Thumbnail);
+            artwork ??= await FetchCoverAsync(title, artist);
 
             Current = new MediaSnapshot(
                 !string.IsNullOrWhiteSpace(title) || !string.IsNullOrWhiteSpace(artist),
@@ -137,6 +146,82 @@ public sealed class MediaService
         }
     }
 
+    private static async Task<BitmapSource?> FetchCoverAsync(string title, string artist)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return null;
+        var cacheKey = $"{title}\u001f{artist}";
+        lock (CoverCache)
+        {
+            if (CoverCache.TryGetValue(cacheKey, out var cached)) return cached;
+        }
+
+        try
+        {
+            var query = Uri.EscapeDataString($"{title} {artist}".Trim());
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                $"https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w={query}&format=json&n=3&p=1");
+            request.Headers.UserAgent.ParseAdd("Mozilla/5.0");
+            request.Headers.Referrer = new Uri("https://y.qq.com/");
+            using var response = await CoverHttp.SendAsync(request);
+            if (!response.IsSuccessStatusCode) return CacheCover(cacheKey, null);
+            var text = await response.Content.ReadAsStringAsync();
+            var start = text.IndexOf('{');
+            var end = text.LastIndexOf('}');
+            if (start < 0 || end <= start) return CacheCover(cacheKey, null);
+            using var doc = JsonDocument.Parse(text[start..(end + 1)]);
+            if (!doc.RootElement.TryGetProperty("data", out var data) ||
+                !data.TryGetProperty("song", out var song) ||
+                !song.TryGetProperty("list", out var list) ||
+                list.GetArrayLength() == 0)
+            {
+                return CacheCover(cacheKey, null);
+            }
+
+            var target = Normalize(title);
+            string albumMid = string.Empty;
+            foreach (var item in list.EnumerateArray())
+            {
+                var songName = item.TryGetProperty("songname", out var sn) ? Normalize(sn.GetString() ?? string.Empty) : string.Empty;
+                if (songName == target || songName.Contains(target) || target.Contains(songName))
+                {
+                    albumMid = item.TryGetProperty("albummid", out var am) ? am.GetString() ?? string.Empty : string.Empty;
+                    break;
+                }
+            }
+            if (string.IsNullOrWhiteSpace(albumMid)) return CacheCover(cacheKey, null);
+
+            var bytes = await CoverHttp.GetByteArrayAsync($"https://y.gtimg.cn/music/photo_new/T002R300x300M000{albumMid}.jpg");
+            if (bytes.Length < 100) return CacheCover(cacheKey, null);
+            using var ms = new MemoryStream(bytes);
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.StreamSource = ms;
+            bitmap.EndInit();
+            bitmap.Freeze();
+            AppLog.Write($"cover api hit {title}");
+            return CacheCover(cacheKey, bitmap);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write($"cover api failed: {ex.Message}");
+            return CacheCover(cacheKey, null);
+        }
+    }
+
+    private static BitmapSource? CacheCover(string key, BitmapSource? bitmap)
+    {
+        lock (CoverCache)
+        {
+            CoverCache[key] = bitmap;
+        }
+        return bitmap;
+    }
+
+    private static string Normalize(string text)
+    {
+        return System.Text.RegularExpressions.Regex.Replace(text.ToLowerInvariant(), @"[^\p{L}\p{N}]", string.Empty);
+    }
     private static async Task<BitmapSource?> ReadArtworkAsync(Windows.Storage.Streams.IRandomAccessStreamReference? reference)
     {
         if (reference is null)
@@ -159,8 +244,9 @@ public sealed class MediaService
             bitmap.Freeze();
             return bitmap;
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Write($"artwork failed: {ex.Message}");
             return null;
         }
     }

@@ -143,6 +143,26 @@ internal sealed class SetupForm : Form
         }
     }
 
+    private static string? ResolveRunningTarget()
+    {
+        try
+        {
+            var process = Process.GetProcessesByName("ShellIsland").FirstOrDefault();
+            var exe = process?.MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(exe)) return null;
+            var directory = Path.GetDirectoryName(exe);
+            if (string.IsNullOrWhiteSpace(directory)) return null;
+            if (string.Equals(Path.GetFileName(directory), "app", StringComparison.OrdinalIgnoreCase))
+            {
+                directory = Path.GetDirectoryName(directory);
+            }
+            return directory;
+        }
+        catch
+        {
+            return null;
+        }
+    }
     private static void Install(string target, bool startup)
     {
         foreach (var process in Process.GetProcessesByName("ShellIsland"))
@@ -259,6 +279,52 @@ Start-ScheduledTask -TaskName 'ShellIslandTap'
         }
     }
 
+    private static void StopExistingInjector(string logPath)
+    {
+        RunCommand("schtasks.exe", "/Delete /TN \"ShellIslandTap\" /F", logPath);
+        RunCommand("sc.exe", "stop ShellIslandInjector", logPath);
+        Thread.Sleep(900);
+        RunCommand("sc.exe", "delete ShellIslandInjector", logPath);
+        foreach (var process in Process.GetProcessesByName("ShellIslandService"))
+        {
+            try { process.Kill(true); } catch { }
+        }
+    }
+
+    private static void RenameLockedFiles(string target, string logPath)
+    {
+        var app = Path.Combine(target, "app");
+        if (!Directory.Exists(app)) return;
+        var stamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+        foreach (var name in new[] { "XamlTap.dll", "Injector.exe", "ShellIslandService.exe", "ShellIsland.exe", "ShellIsland.dll" })
+        {
+            var path = Path.Combine(app, name);
+            if (!File.Exists(path)) continue;
+            try
+            {
+                File.Move(path, $"{path}.old.{stamp}", overwrite: false);
+                File.AppendAllText(logPath, $"renamed locked {name}\r\n");
+            }
+            catch (Exception ex)
+            {
+                File.AppendAllText(logPath, $"rename failed {name}: {ex.Message}\r\n");
+            }
+        }
+    }
+    private static void RestartExplorer(string logPath)
+    {
+        RunCommand("taskkill.exe", "/f /t /im explorer.exe", logPath);
+        Thread.Sleep(1000);
+        foreach (var process in Process.GetProcessesByName("explorer"))
+        {
+            try { process.Kill(true); } catch { }
+        }
+        Thread.Sleep(2000);
+        if (Process.GetProcessesByName("explorer").Length == 0)
+        {
+            try { Process.Start(new ProcessStartInfo { FileName = "explorer.exe", UseShellExecute = true }); } catch { }
+        }
+    }
     private static void CreateInjectorService(string target)
     {
         var app = Path.Combine(target, "app");

@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private readonly MediaService _media = new();
     private TaskbarIslandHost? _islandHost;
     private string _lastArtworkKey = string.Empty;
+    private string _lastMediaLogKey = string.Empty;
     private readonly DispatcherTimer _explorerTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private int _explorerPid;
     private int _explorerRestarts;
@@ -64,6 +65,7 @@ public partial class MainWindow : Window
     public MediaService Media => _media;
 
     public SearchService Search => _search;
+    public LyricsService Lyrics => _lyrics;
 
     private void HideFromAltTab()
     {
@@ -74,6 +76,7 @@ public partial class MainWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        AppLog.Write("OnLoaded");
         StartButtonLocator.Refresh();
         _startRectTimer.Tick += (_, _) => StartButtonLocator.Refresh();
         _startRectTimer.Start();
@@ -86,7 +89,6 @@ public partial class MainWindow : Window
         _mediaTimer.Start();
         _explorerTimer.Tick += (_, _) => CheckExplorer();
         _explorerTimer.Start();
-        _ = TapBootstrapper.EnsureInjectedAsync();
         await PollMediaAsync();
     }
 
@@ -99,8 +101,7 @@ public partial class MainWindow : Window
             var path = Path.Combine(dir, "artwork.png");
             if (snapshot.Artwork is null)
             {
-                File.Delete(path);
-                _lastArtworkKey = string.Empty;
+                if (!snapshot.HasMedia) File.Delete(path);
                 return;
             }
 
@@ -155,6 +156,12 @@ public partial class MainWindow : Window
     private async Task PollMediaAsync()
     {
         var next = await _media.RefreshAsync();
+        var mediaKey = $"{next.HasMedia}|{next.IsPlaying}|{next.Title}|{next.Artist}|{next.SourceApp}";
+        if (mediaKey != _lastMediaLogKey)
+        {
+            _lastMediaLogKey = mediaKey;
+            AppLog.Write($"media has={next.HasMedia} playing={next.IsPlaying} title={next.Title} artist={next.Artist} source={next.SourceApp}");
+        }
         if (next.Artwork is not null)
         {
             IslandArt.Source = next.Artwork;
@@ -280,6 +287,34 @@ public partial class MainWindow : Window
         _islandPanel.Closed += (_, _) => _islandPanel = null;
         _islandPanel.ShowAboveTaskbar();
     }
+    private static async Task RestartExplorerForFreshTapAsync()
+    {
+        AppLog.Write("explorer restart scheduled");
+        await Task.Delay(2500);
+        try
+        {
+            AppLog.Write("killing explorer for fresh TAP");
+            foreach (var process in Process.GetProcessesByName("explorer"))
+            {
+                try { process.Kill(true); } catch { }
+            }
+
+            await Task.Delay(1500);
+            AppLog.Write("explorer restart wait done");
+            if (Process.GetProcessesByName("explorer").Length == 0)
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    UseShellExecute = true,
+                });
+            }
+        }
+        catch
+        {
+            // Explorer will be restarted by Windows or next logon
+        }
+    }
     private void CheckExplorer()
     {
         if (_explorerExitRequested) return;
@@ -305,16 +340,11 @@ public partial class MainWindow : Window
                 : 1;
             _lastExplorerChange = now;
 
-            if (_explorerRestarts < 3) return;
-
-            _explorerExitRequested = true;
-            _explorerTimer.Stop();
-            MessageBox.Show(
-                "检测到文件资源管理器连续重启 3 次，ShellIsland 将退出。",
-                "ShellIsland",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            Application.Current.Shutdown();
+            if (_explorerRestarts >= 3)
+            {
+                AppLog.Write("explorer restarted 3 times, keep running");
+                _explorerRestarts = 0;
+            }
         }
         catch
         {

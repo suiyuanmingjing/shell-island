@@ -18,6 +18,8 @@ public partial class App : Application
         }
 
         base.OnStartup(e);
+        Services.AppLog.Init();
+        Services.AutoStartService.Enable();
         DispatcherUnhandledException += (_, args) =>
         {
             try

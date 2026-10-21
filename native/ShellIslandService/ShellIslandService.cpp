@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <tlhelp32.h>
 #include <string>
 
@@ -6,6 +6,7 @@ static SERVICE_STATUS_HANDLE g_statusHandle = nullptr;
 static SERVICE_STATUS g_status{};
 static HANDLE g_stopEvent = nullptr;
 static wchar_t g_dllPath[MAX_PATH] = {};
+static wchar_t g_sourceDll[MAX_PATH] = {};
 
 static void LogLine(const char* text)
 {
@@ -20,6 +21,14 @@ static void LogLine(const char* text)
 
 static DWORD FindExplorer()
 {
+    HWND shell = GetShellWindow();
+    if (shell)
+    {
+        DWORD shellPid = 0;
+        GetWindowThreadProcessId(shell, &shellPid);
+        if (shellPid != 0) return shellPid;
+    }
+
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) return 0;
     PROCESSENTRY32W entry{};
@@ -88,20 +97,45 @@ static bool Inject(DWORD pid)
     return true;
 }
 
+static bool InjectCopy(DWORD pid, int attempt)
+{
+    CreateDirectoryW(L"C:\\ProgramData\\ShellIsland", nullptr);
+    wchar_t copyPath[MAX_PATH];
+    wsprintfW(copyPath, L"C:\\ProgramData\\ShellIsland\\XamlTap_%lu_%d.dll", pid, attempt);
+    if (!CopyFileW(g_sourceDll, copyPath, FALSE))
+    {
+        char buffer[160];
+        wsprintfA(buffer, "CopyFile failed: %lu\r\n", GetLastError());
+        LogLine(buffer);
+        return false;
+    }
+
+    lstrcpynW(g_dllPath, copyPath, MAX_PATH);
+    return Inject(pid);
+}
+
 static DWORD WINAPI Worker(LPVOID)
 {
     DWORD lastPid = 0;
-    while (WaitForSingleObject(g_stopEvent, 1000) == WAIT_TIMEOUT)
+    ULONGLONG lastAttempt = 0;
+    int attempt = 0;
+
+    while (WaitForSingleObject(g_stopEvent, 250) == WAIT_TIMEOUT)
     {
         DWORD pid = FindExplorer();
-        if (pid != 0 && pid != lastPid)
-        {
-            Inject(pid);
-            lastPid = pid;
-        }
-        else if (pid == 0)
+        if (pid == 0)
         {
             lastPid = 0;
+            continue;
+        }
+
+        const ULONGLONG now = GetTickCount64();
+        if (pid != lastPid || now - lastAttempt >= 180000)
+        {
+            ++attempt;
+            InjectCopy(pid, attempt);
+            lastPid = pid;
+            lastAttempt = now;
         }
     }
     return 0;
@@ -127,10 +161,11 @@ static void WINAPI ServiceMain(DWORD, LPWSTR*)
     g_status.dwControlsAccepted = 0;
     SetServiceStatus(g_statusHandle, &g_status);
 
-    GetModuleFileNameW(nullptr, g_dllPath, MAX_PATH);
-    wchar_t* slash = wcsrchr(g_dllPath, L'\\');
+    GetModuleFileNameW(nullptr, g_sourceDll, MAX_PATH);
+    wchar_t* slash = wcsrchr(g_sourceDll, L'\\');
     if (slash) *(slash + 1) = L'\0';
-    lstrcatW(g_dllPath, L"XamlTap.dll");
+    lstrcatW(g_sourceDll, L"XamlTap.dll");
+    lstrcpynW(g_dllPath, g_sourceDll, MAX_PATH);
 
     g_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     CreateThread(nullptr, 0, Worker, nullptr, 0, nullptr);
@@ -158,12 +193,12 @@ int wmain()
         if (GetLastError() == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT)
         {
             // Console debug mode: inject once and exit.
-            GetModuleFileNameW(nullptr, g_dllPath, MAX_PATH);
-            wchar_t* slash = wcsrchr(g_dllPath, L'\\');
+            GetModuleFileNameW(nullptr, g_sourceDll, MAX_PATH);
+            wchar_t* slash = wcsrchr(g_sourceDll, L'\\');
             if (slash) *(slash + 1) = L'\0';
-            lstrcatW(g_dllPath, L"XamlTap.dll");
+            lstrcatW(g_sourceDll, L"XamlTap.dll");
             DWORD pid = FindExplorer();
-            if (pid) Inject(pid);
+            if (pid) InjectCopy(pid, 1);
             return 0;
         }
         return 1;

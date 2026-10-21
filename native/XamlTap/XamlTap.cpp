@@ -38,10 +38,26 @@ static std::mutex g_mediaMutex;
 static std::wstring g_mediaText;
 static std::wstring g_mediaArtist;
 static bool g_hasMedia = false;
+static bool g_isPlaying = false;
+static std::atomic<bool> g_foundSearchRoot = false;
+static void SetSearchboxMode(DWORD mode);
+static DWORD SearchboxMode();
+static void EnsureSearchTree();
+static HANDLE g_readyEvent = nullptr;
+static void SignalTapReady();
 static std::once_flag g_mediaOnce;
 static RECT g_searchRect = {};
 static std::atomic<bool> g_mediaActive = false;
 static HHOOK g_searchHook = nullptr;
+static void SignalTapReady()
+{
+    HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\ShellIslandTapReady");
+    if (ready)
+    {
+        SetEvent(ready);
+        CloseHandle(ready);
+    }
+}
 static void LogText(const char* text);
 
 static bool ReadLyricBridge(std::wstring& title, std::wstring& lyric)
@@ -141,14 +157,16 @@ static void MediaThread()
             std::wstring bridgeTitle, bridgeLyric;
             if (ReadLyricBridge(bridgeTitle, bridgeLyric) && !bridgeLyric.empty())
             {
-                artistText = text;
+                artistText = bridgeTitle;
                 text = bridgeLyric;
+                hasMedia = true;
             }
             std::lock_guard<std::mutex> lock(g_mediaMutex);
             g_mediaText = text;
             g_mediaArtist = artistText;
             g_hasMedia = hasMedia;
             g_mediaActive = hasMedia;
+            g_isPlaying = playing;
         }
         (void)playing;
         Sleep(1000);
@@ -166,6 +184,37 @@ static DWORD SearchboxMode()
     }
     return mode;
 }
+static void SetSearchboxMode(DWORD mode)
+{
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+        0, KEY_SET_VALUE, &key) != ERROR_SUCCESS)
+    {
+        return;
+    }
+    RegSetValueExW(key, L"SearchboxTaskbarMode", 0, REG_DWORD,
+        reinterpret_cast<const BYTE*>(&mode), sizeof(mode));
+    RegCloseKey(key);
+    SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
+        reinterpret_cast<LPARAM>(L"TraySettings"), SMTO_ABORTIFHUNG, 2000, nullptr);
+}
+
+static void EnsureSearchTree()
+{
+    Sleep(2500);
+    if (g_foundSearchRoot)
+    {
+        return;
+    }
+
+    const DWORD mode = SearchboxMode();
+    const DWORD alternate = mode == 3 ? 2 : 3;
+    LogText("search tree missing, forcing rebuild\r\n");
+    SetSearchboxMode(alternate);
+    Sleep(1500);
+    SetSearchboxMode(mode);
+}
 static double SearchModeWidth()
 {
     DWORD mode = 1;
@@ -180,8 +229,8 @@ static double SearchModeWidth()
     switch (mode)
     {
     case 1: return 44.0;
-    case 2: return 120.0;
-    case 3: return 220.0;
+    case 2: return 220.0;
+    case 3: return 120.0;
     default: return 44.0;
     }
 }
@@ -390,8 +439,12 @@ public:
     winrt::Windows::UI::Xaml::Controls::FontIcon m_icon{ nullptr };
     winrt::Windows::UI::Xaml::Shapes::Ellipse m_artwork{ nullptr };
     winrt::Windows::UI::Xaml::Media::ImageBrush m_artBrush{ nullptr };
+    winrt::Windows::UI::Xaml::Media::RotateTransform m_artRotate{ nullptr };
+    winrt::Windows::UI::Xaml::Media::Animation::Storyboard m_rotateStoryboard{ nullptr };
+    bool m_rotateRunning = false;
     uint64_t m_artStamp = 0;
     winrt::Windows::UI::Xaml::Controls::TextBlock m_title{ nullptr };
+    winrt::Windows::UI::Xaml::Controls::TextBlock m_titleCopy{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock m_artist{ nullptr };
     winrt::Windows::UI::Xaml::Controls::StackPanel m_textPanel{ nullptr };
     winrt::Windows::UI::Xaml::Controls::StackPanel m_row{ nullptr };
@@ -450,6 +503,7 @@ public:
             }            if (typeName.find(L"SearchButtonRootGrid") != std::wstring::npos ||
                 elementName.find(L"SearchBoxButtonRootPanel") != std::wstring::npos)
             {
+                g_foundSearchRoot = true;
                 LogText("ModifySearch call\r\n");
                 ModifySearch(element.Handle, relation.Parent, typeName);
             }
@@ -612,6 +666,63 @@ public:
         storyboard.Children().Append(animation);
         storyboard.Begin();
     }
+    void TryApplyExisting(winrt::Windows::Foundation::IInspectable const& root)
+    {
+        try
+        {
+            auto element = root.try_as<winrt::Windows::UI::Xaml::UIElement>();
+            if (!element)
+            {
+                LogText("GetUiLayer is not UIElement\r\n");
+                return;
+            }
+            WalkExisting(element, 0);
+        }
+        catch (...)
+        {
+            LogText("TryApplyExisting exception\r\n");
+        }
+    }
+
+    void WalkExisting(winrt::Windows::UI::Xaml::UIElement const& element, int depth)
+    {
+        if (!element || depth > 80) return;
+        try
+        {
+            auto name = winrt::get_class_name(element);
+            std::wstring typeName(name.c_str());
+            auto framework = element.try_as<winrt::Windows::UI::Xaml::FrameworkElement>();
+            if (framework)
+            {
+                std::wstring elementName(framework.Name().c_str());
+                if (elementName == L"SearchBoxButtonRootPanel" ||
+                    typeName.find(L"SearchButtonRootGrid") != std::wstring::npos)
+                {
+                    if (auto panel = element.try_as<winrt::Windows::UI::Xaml::Controls::Panel>())
+                    {
+                        g_foundSearchRoot = true;
+                        ApplyIsland(panel);
+                        LogText("existing SearchButtonRootGrid applied\r\n");
+                        return;
+                    }
+                }
+            }
+
+            const int count = winrt::Windows::UI::Xaml::Media::VisualTreeHelper::GetChildrenCount(element);
+            for (int i = 0; i < count; ++i)
+            {
+                auto child = winrt::Windows::UI::Xaml::Media::VisualTreeHelper::GetChild(element, i);
+                if (auto childElement = child.try_as<winrt::Windows::UI::Xaml::UIElement>())
+                {
+                    WalkExisting(childElement, depth + 1);
+                }
+                if (g_foundSearchRoot) return;
+            }
+        }
+        catch (...)
+        {
+        }
+    }
     void StartMediaTimer()
     {
         if (m_timer)
@@ -625,11 +736,13 @@ public:
         {
             std::wstring title, artist;
             bool hasMedia;
+            bool playing;
             {
                 std::lock_guard<std::mutex> lock(g_mediaMutex);
                 title = g_mediaText;
                 artist = g_mediaArtist;
                 hasMedia = g_hasMedia;
+                playing = g_isPlaying;
             }
 
             if (hasMedia)
@@ -651,16 +764,11 @@ public:
                     child.Element.Visibility(winrt::Windows::UI::Xaml::Visibility::Collapsed);
                 }
 
-                double width = m_nativeWidth;
-                if (m_panel)
-                {
-                    auto actual = m_panel.ActualWidth();
-                    if (actual > 20) width = actual;
-                }
+                double width = SearchModeWidth();
 
                 const DWORD searchMode = SearchboxMode();
                 const bool showText = searchMode != 1;
-                const bool showTitle = searchMode == 3 && !artist.empty();
+                const bool showTitle = searchMode == 2 && !artist.empty();
                 const double viewport = (std::max)(20.0, width - 44.0);
                 AnimateWidth((std::max)(32.0, width - 4.0));
                 m_textPanel.Width(viewport);
@@ -679,6 +787,20 @@ public:
                 m_island.Visibility(winrt::Windows::UI::Xaml::Visibility::Visible);
                 ApplyIslandColors();
                 RefreshArtwork();
+                if (playing && m_artwork.Visibility() == winrt::Windows::UI::Xaml::Visibility::Visible)
+                {
+                    if (m_rotateStoryboard && !m_rotateRunning)
+                    {
+                        m_rotateStoryboard.Begin();
+                        m_rotateRunning = true;
+                    }
+                }
+                else
+                {
+                    if (m_rotateRunning && m_rotateStoryboard) m_rotateStoryboard.Stop();
+                    m_rotateRunning = false;
+                    if (m_artRotate) m_artRotate.Angle(0);
+                }
                 m_textPanel.Visibility(showText ? winrt::Windows::UI::Xaml::Visibility::Visible
                                                 : winrt::Windows::UI::Xaml::Visibility::Collapsed);
                 if (title != m_lastTitle)
@@ -688,6 +810,7 @@ public:
                     m_titleTransform.X(0);
                 }
                 m_title.Text(title);
+                if (m_titleCopy) m_titleCopy.Text(title);
                 m_artist.Text(artist);
                 m_title.FontSize(showTitle ? 13.0 : 11.5);
                 m_artist.Visibility(showTitle ? winrt::Windows::UI::Xaml::Visibility::Visible
@@ -803,6 +926,16 @@ public:
             winrt::Windows::UI::Xaml::Controls::Canvas::SetLeft(title, 0);
             winrt::Windows::UI::Xaml::Controls::Canvas::SetTop(title, 0);
             titleCanvas.Children().Append(title);
+            auto titleCopy = winrt::Windows::UI::Xaml::Controls::TextBlock();
+            titleCopy.Foreground(winrt::Windows::UI::Xaml::Media::SolidColorBrush(
+                winrt::Windows::UI::ColorHelper::FromArgb(255, 255, 255, 255)));
+            titleCopy.FontFamily(winrt::Windows::UI::Xaml::Media::FontFamily(L"Segoe UI Variable Text"));
+            titleCopy.FontSize(11);
+            titleCopy.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+            titleCopy.TextWrapping(winrt::Windows::UI::Xaml::TextWrapping::NoWrap);
+            titleCopy.RenderTransform(titleTransform);
+            winrt::Windows::UI::Xaml::Controls::Canvas::SetTop(titleCopy, 0);
+            titleCanvas.Children().Append(titleCopy);
 
             auto artist = winrt::Windows::UI::Xaml::Controls::TextBlock();
             artist.Foreground(winrt::Windows::UI::Xaml::Media::SolidColorBrush(
@@ -824,7 +957,26 @@ public:
             m_icon = icon;
             m_artwork = artwork;
             m_artBrush = artBrush;
+            auto rotate = winrt::Windows::UI::Xaml::Media::RotateTransform();
+            rotate.CenterX(8);
+            rotate.CenterY(8);
+            artwork.RenderTransform(rotate);
+            auto spin = winrt::Windows::UI::Xaml::Media::Animation::DoubleAnimation();
+            spin.From(0.0);
+            spin.To(360.0);
+            spin.Duration(winrt::Windows::UI::Xaml::Duration{
+                winrt::Windows::Foundation::TimeSpan{ std::chrono::seconds(120) } });
+            auto repeat = winrt::Windows::UI::Xaml::Media::Animation::RepeatBehavior{};
+            repeat.Type = winrt::Windows::UI::Xaml::Media::Animation::RepeatBehaviorType::Forever;
+            spin.RepeatBehavior(repeat);
+            auto storyboard = winrt::Windows::UI::Xaml::Media::Animation::Storyboard();
+            winrt::Windows::UI::Xaml::Media::Animation::Storyboard::SetTarget(spin, rotate);
+            winrt::Windows::UI::Xaml::Media::Animation::Storyboard::SetTargetProperty(spin, L"Angle");
+            storyboard.Children().Append(spin);
+            m_artRotate = rotate;
+            m_rotateStoryboard = storyboard;
             m_title = title;
+            m_titleCopy = titleCopy;
             m_artist = artist;
             m_textPanel = textPanel;
             m_targetWidth = (std::max)(32.0, m_nativeWidth - 4.0);
@@ -846,14 +998,20 @@ public:
                     if (!m_titleCanvas || !m_title || !m_titleTransform) return;
                     const double viewport = m_titleCanvas.ActualWidth();
                     const double textWidth = m_title.ActualWidth();
+                    const double gap = 18.0;
+                    if (m_titleCopy)
+                    {
+                        winrt::Windows::UI::Xaml::Controls::Canvas::SetLeft(m_titleCopy, textWidth + gap);
+                    }
                     if (textWidth <= viewport + 2.0)
                     {
                         m_scrollOffset = 0;
                         m_titleTransform.X(0);
                         return;
                     }
+                    const double stepWidth = textWidth + gap;
                     m_scrollOffset -= 1.2;
-                    if (m_scrollOffset < -(textWidth - viewport) - 12.0) m_scrollOffset = 0;
+                    if (m_scrollOffset <= -stepWidth) m_scrollOffset += stepWidth;
                     m_titleTransform.X(m_scrollOffset);
                 });
                 m_scrollTimer.Start();
@@ -978,6 +1136,17 @@ public:
         char buffer[128];
         wsprintfA(buffer, "AdviseVisualTreeChange hr=0x%08X\r\n", hr);
         LogText(buffer);
+        ::IInspectable* layerRaw = nullptr;
+        HRESULT layerHr = m_diag->GetUiLayer(&layerRaw);
+        char layerBuffer[128];
+        wsprintfA(layerBuffer, "GetUiLayer hr=0x%08X\\r\\n", layerHr);
+        LogText(layerBuffer);
+        if (SUCCEEDED(layerHr) && layerRaw)
+        {
+            winrt::Windows::Foundation::IInspectable layer{ layerRaw, winrt::take_ownership_from_abi };
+            m_callback->TryApplyExisting(layer);
+        }
+        std::thread(EnsureSearchTree).detach();
         return hr;
     }
 
@@ -1060,14 +1229,17 @@ static DWORD WINAPI InstallThread(LPVOID)
     extern HMODULE g_module;
     GetModuleFileNameW(g_module, dllPath, MAX_PATH);
 
-    for (int attempt = 1; attempt <= 60; ++attempt)
+    for (int attempt = 1; attempt <= 600; ++attempt)
     {
         wchar_t endpoint[64];
         wsprintfW(endpoint, L"VisualDiagConnection%d", attempt);
         HRESULT hr = init(endpoint, GetCurrentProcessId(), nullptr, dllPath, CLSID_XamlTap, nullptr);
         char buffer[128];
-        wsprintfA(buffer, "InitializeXamlDiagnosticsEx attempt=%d hr=0x%08X\r\n", attempt, hr);
-        LogText(buffer);
+        if (attempt == 1 || attempt % 10 == 0)
+        {
+            wsprintfA(buffer, "InitializeXamlDiagnosticsEx attempt=%d hr=0x%08X\r\n", attempt, hr);
+            LogText(buffer);
+        }
         if (SUCCEEDED(hr)) return 0;
         Sleep(500);
     }

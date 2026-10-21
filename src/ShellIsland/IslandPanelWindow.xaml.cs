@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using ShellIsland.Services;
 
@@ -14,32 +15,33 @@ namespace ShellIsland;
 public partial class IslandPanelWindow : Window
 {
     private readonly MainWindow _host;
-    private readonly LyricsService _lyrics = new();
+    private readonly LyricsService _lyrics;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(350) };
     private string _lyricKey = string.Empty;
-    private bool _translationEnabled = true;
     private bool _leftPanel;
+    private bool _closing;
     private LyricLine? _currentLine;
     private string _sourceKey = string.Empty;
     private string _sourceName = string.Empty;
     private ImageSource? _sourceIcon;
-    private readonly DispatcherTimer _autoHide = new() { Interval = TimeSpan.FromSeconds(8) };
+    private readonly DispatcherTimer _autoHide = new() { Interval = TimeSpan.FromSeconds(3) };
 
     public IslandPanelWindow(MainWindow host)
     {
         _host = host;
+        _lyrics = host.Lyrics;
         InitializeComponent();
         ApplyTheme();
         _timer.Tick += async (_, _) => await RefreshAsync();
         _timer.Start();
-        _autoHide.Tick += (_, _) => Close();
+        _autoHide.Tick += (_, _) => { AppLog.Write("panel auto-hide 3s"); CloseSafely(); };
         PreviewMouseMove += (_, _) => ResetAutoHide();
         PreviewMouseDown += (_, _) => { _leftPanel = false; ResetAutoHide(); };
         MouseEnter += (_, _) => { _leftPanel = false; ResetAutoHide(); };
-        MouseLeave += (_, _) => { _leftPanel = true; };
-        PreviewKeyDown += (_, _) => { if (_leftPanel) Close(); };
-        Deactivated += (_, _) => { if (_leftPanel) Close(); };
-        Closed += (_, _) => { _timer.Stop(); _autoHide.Stop(); };
+        MouseLeave += (_, _) => { _leftPanel = true; AppLog.Write("panel mouse leave"); };
+        PreviewKeyDown += (_, _) => { if (_leftPanel) { AppLog.Write("panel close on key after leave"); CloseSafely(); } };
+        Deactivated += (_, _) => { if (_leftPanel) { AppLog.Write("panel close on deactivate after leave"); CloseSafely(); } };
+        Closed += (_, _) => { _closing = true; _timer.Stop(); _autoHide.Stop(); };
         ResetAutoHide();
     }
 
@@ -53,12 +55,21 @@ public partial class IslandPanelWindow : Window
         var anchor = search.Right > search.Left ? (search.Left + search.Right) / 2.0 / dpi.DpiScaleX : work.Left + 160;
         Left = Math.Clamp(anchor - Width / 2, work.Left + 12, work.Right - Width - 12);
         Top = Math.Max(work.Top + 12, taskbar.Top - Height - 10);
+        AppLog.Write($"panel show left={Left} top={Top}");
         Show();
         Activate();
         ResetAutoHide();
 
     }
 
+    private void CloseSafely()
+    {
+        if (_closing) return;
+        _closing = true;
+        _autoHide.Stop();
+        _timer.Stop();
+        Close();
+    }
     private void ResetAutoHide()
     {
         _autoHide.Stop();
@@ -99,11 +110,11 @@ public partial class IslandPanelWindow : Window
         SourceFallback.Visibility = _sourceIcon is null ? Visibility.Visible : Visibility.Collapsed;
 
         _currentLine = await _lyrics.GetCurrentLyricAsync(snapshot.Title, snapshot.Artist, snapshot.Position);
-        ApplyTranslation();
+        LyricText.Text = _currentLine?.Text ?? (string.IsNullOrWhiteSpace(TitleText.Text) ? string.Empty : TitleText.Text);
 
         if (!snapshot.HasMedia)
         {
-            Close();
+            CloseSafely();
         }
     }
 
@@ -130,34 +141,9 @@ public partial class IslandPanelWindow : Window
 
     private void OnSearchClick(object sender, MouseButtonEventArgs e)
     {
-        Close();
+        AppLog.Write("panel search button");
+        CloseSafely();
         NativeSearchLauncher.Launch(string.Empty);
-    }
-
-    private void ApplyTranslation()
-    {
-        var translation = _currentLine?.Translation ?? string.Empty;
-        var hasTranslation = !string.IsNullOrWhiteSpace(translation);
-        TranslateButton.IsEnabled = hasTranslation;
-        TranslateButton.Opacity = hasTranslation ? 1 : 0.35;
-        LyricText.Text = _currentLine?.Text ?? (string.IsNullOrWhiteSpace(TitleText.Text) ? string.Empty : TitleText.Text);
-        if (_translationEnabled && hasTranslation)
-        {
-            LyricTranslation.Text = translation;
-            LyricTranslation.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            LyricTranslation.Text = string.Empty;
-            LyricTranslation.Visibility = Visibility.Collapsed;
-        }
-    }
-
-    private void OnTranslateClick(object sender, RoutedEventArgs e)
-    {
-        _translationEnabled = !_translationEnabled;
-        TranslateButton.Content = _translationEnabled ? "译" : "原";
-        ApplyTranslation();
     }
 
     private static (string Name, ImageSource? Icon) ResolveSource(string source)
@@ -216,7 +202,7 @@ public partial class IslandPanelWindow : Window
         Root.BorderBrush = new SolidColorBrush(light ? Color.FromArgb(0x22, 0, 0, 0) : Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF));
         var primary = new SolidColorBrush(light ? Color.FromRgb(0x1A, 0x1A, 0x1A) : Colors.White);
         var secondary = new SolidColorBrush(light ? Color.FromRgb(0x60, 0x60, 0x60) : Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF));
-        foreach (var text in new TextBlock[] { TitleText, LyricText, LyricTranslation, PlayGlyph, PositionText, DurationText, SearchGlyph, PrevGlyph, NextGlyph, SourceName, SourceFallback, ArtworkFallback })
+        foreach (var text in new TextBlock[] { TitleText, LyricText, PlayGlyph, PositionText, DurationText, SearchGlyph, PrevGlyph, NextGlyph, SourceName, SourceFallback, ArtworkFallback })
         {
             text.Foreground = text == LyricText || text == TitleText ? primary : secondary;
         }
@@ -224,8 +210,7 @@ public partial class IslandPanelWindow : Window
         {
             text.Foreground = secondary;
         }
-        TranslateButton.Foreground = primary;
-        TranslateButton.Background = Brushes.Transparent;
+
         SearchGlyph.Foreground = primary;
         PrevGlyph.Foreground = primary;
         NextGlyph.Foreground = primary;
