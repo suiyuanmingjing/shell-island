@@ -1,6 +1,6 @@
 # ShellIsland
 
-Windows 11 任务栏音乐岛，使用 Explorer XAML 注入实现。
+Windows 11 任务栏音乐岛。
 
 ## 构建
 
