@@ -16,7 +16,7 @@ TAP DLL 和 Injector 在 `native/XamlTap`、`native/ShellHook` 中构建，发�
 
 使用 Release 中的 `ShellIslandSetup.exe`，运行后选择安装目录。
 
-注入器和 TAP 会被杀软误判，安装脚本会添加 Defender 排除。
+如果音乐岛消失等待3-5分钟即可。
 
 ## 赞助
 
