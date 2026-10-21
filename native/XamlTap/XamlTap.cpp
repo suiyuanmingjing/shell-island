@@ -442,6 +442,8 @@ public:
     winrt::Windows::UI::Xaml::Media::RotateTransform m_artRotate{ nullptr };
     winrt::Windows::UI::Xaml::Media::Animation::Storyboard m_rotateStoryboard{ nullptr };
     bool m_rotateRunning = false;
+    int m_missingTicks = 0;
+    bool m_islandVisible = true;
     uint64_t m_artStamp = 0;
     winrt::Windows::UI::Xaml::Controls::TextBlock m_title{ nullptr };
     winrt::Windows::UI::Xaml::Controls::TextBlock m_titleCopy{ nullptr };
@@ -759,6 +761,7 @@ public:
 
             if (hasMedia)
             {
+                m_missingTicks = 0;
                 for (auto const& child : m_original)
                 {
                     child.Element.Visibility(winrt::Windows::UI::Xaml::Visibility::Collapsed);
@@ -784,7 +787,11 @@ public:
                 {
                     icon.Element.Visibility(winrt::Windows::UI::Xaml::Visibility::Collapsed);
                 }
-                m_island.Visibility(winrt::Windows::UI::Xaml::Visibility::Visible);
+                if (!m_islandVisible)
+                {
+                    m_island.Visibility(winrt::Windows::UI::Xaml::Visibility::Visible);
+                    m_islandVisible = true;
+                }
                 ApplyIslandColors();
                 RefreshArtwork();
                 if (playing && m_artwork.Visibility() == winrt::Windows::UI::Xaml::Visibility::Visible)
@@ -818,7 +825,11 @@ public:
             }
             else
             {
+                if (++m_missingTicks < 3) return;
+                m_missingTicks = 0;
+                if (!m_islandVisible) return;
                 m_island.Visibility(winrt::Windows::UI::Xaml::Visibility::Collapsed);
+                m_islandVisible = false;
                 m_scrollOffset = 0;
                 if (m_titleTransform) m_titleTransform.X(0);
                 for (auto const& icon : m_nativeIcons)
@@ -983,6 +994,7 @@ public:
             m_row = row;
             m_titleCanvas = titleCanvas;
             m_titleTransform = titleTransform;
+            SignalTapReady();
             border.Tapped([this](winrt::Windows::Foundation::IInspectable const&,
                 winrt::Windows::UI::Xaml::Input::TappedRoutedEventArgs const& args)
             {
@@ -1254,6 +1266,13 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
     {
         DisableThreadLibraryCalls(module);
         g_module = module;
+        HANDLE readyEvent = CreateEventW(nullptr, TRUE, FALSE, L"Local\\ShellIslandTapReady");
+        if (readyEvent)
+        {
+            const bool alreadyReady = WaitForSingleObject(readyEvent, 0) == WAIT_OBJECT_0;
+            CloseHandle(readyEvent);
+            if (alreadyReady) return TRUE;
+        }
         LogText("XamlTap loaded\r\n");
         CreateThread(nullptr, 0, InstallThread, nullptr, 0, nullptr);
     }

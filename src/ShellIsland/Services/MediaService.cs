@@ -32,6 +32,9 @@ public sealed class MediaService
     private static readonly Dictionary<string, BitmapSource?> CoverCache = new();
     private GlobalSystemMediaTransportControlsSessionManager? _manager;
     private DateTime _lastInitAttempt = DateTime.MinValue;
+    private string _timelineKey = string.Empty;
+    private TimeSpan _lastPosition = TimeSpan.Zero;
+    private DateTime _lastPositionAt = DateTime.UtcNow;
 
     public MediaSnapshot Current { get; private set; } = MediaSnapshot.Empty;
 
@@ -48,15 +51,25 @@ public sealed class MediaService
             var session = _manager?.GetCurrentSession();
             if (_manager is not null)
             {
+                var current = _manager.GetCurrentSession();
+                var bestScore = -1;
                 foreach (var candidate in _manager.GetSessions())
                 {
                     try
                     {
                         var candidateProps = await candidate.TryGetMediaPropertiesAsync();
-                        if (!string.IsNullOrWhiteSpace(candidateProps.Title))
+                        if (string.IsNullOrWhiteSpace(candidateProps.Title)) continue;
+                        var info = candidate.GetPlaybackInfo();
+                        var score = 0;
+                        if (info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing) score += 100;
+                        if (current is not null && candidate.SourceAppUserModelId == current.SourceAppUserModelId) score += 40;
+                        var source = candidate.SourceAppUserModelId ?? string.Empty;
+                        if (source.Contains("cloudmusic", StringComparison.OrdinalIgnoreCase) ||
+                            source.Contains("netease", StringComparison.OrdinalIgnoreCase)) score += 20;
+                        if (score > bestScore)
                         {
+                            bestScore = score;
                             session = candidate;
-                            break;
                         }
                     }
                     catch
@@ -75,18 +88,49 @@ public sealed class MediaService
             var timeline = session.GetTimelineProperties();
             var title = props.Title ?? string.Empty;
             var artist = props.Artist ?? string.Empty;
+            var sourceApp = session.SourceAppUserModelId ?? string.Empty;
+            var status = playback.PlaybackStatus;
+            var playing = status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+            var hasMedia = status != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Closed &&
+                           status != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Stopped &&
+                           (!string.IsNullOrWhiteSpace(title) || !string.IsNullOrWhiteSpace(artist));
             var artwork = await ReadArtworkAsync(props.Thumbnail);
             artwork ??= await FetchCoverAsync(title, artist);
 
+            var duration = timeline.EndTime - timeline.StartTime;
+            var position = timeline.Position;
+            var key = $"{sourceApp}\u001f{title}\u001f{artist}";
+            var now = DateTime.UtcNow;
+            if (key != _timelineKey)
+            {
+                _timelineKey = key;
+                _lastPosition = position;
+                _lastPositionAt = now;
+            }
+            else if (playing)
+            {
+                if (position <= _lastPosition + TimeSpan.FromMilliseconds(50))
+                {
+                    position = _lastPosition + (now - _lastPositionAt);
+                }
+                else
+                {
+                    _lastPosition = position;
+                    _lastPositionAt = now;
+                }
+            }
+            if (duration > TimeSpan.Zero && position > duration) position = duration;
+            if (position < TimeSpan.Zero) position = TimeSpan.Zero;
+
             Current = new MediaSnapshot(
-                !string.IsNullOrWhiteSpace(title) || !string.IsNullOrWhiteSpace(artist),
-                playback.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing,
+                hasMedia,
+                playing,
                 title,
                 artist,
                 props.AlbumTitle ?? string.Empty,
-                session.SourceAppUserModelId ?? string.Empty,
-                timeline.Position,
-                timeline.EndTime - timeline.StartTime,
+                sourceApp,
+                position,
+                duration,
                 artwork);
             return Current;
         }

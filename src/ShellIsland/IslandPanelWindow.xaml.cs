@@ -192,6 +192,20 @@ public partial class IslandPanelWindow : Window
             name = source[(source.LastIndexOf('\\') + 1)..];
         }
 
+        if (name.Contains("cloudmusic", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("netease", StringComparison.OrdinalIgnoreCase) ||
+            source.Contains("orpheus", StringComparison.OrdinalIgnoreCase))
+        {
+            name = "网易云音乐";
+            if (path is null)
+            {
+                foreach (var process in Process.GetProcessesByName("cloudmusic"))
+                {
+                    try { path = process.MainModule?.FileName; break; } catch { }
+                }
+            }
+        }
+
         var icon = path is null ? null : IconLoader.Load(path);
         return (name, icon);
     }
